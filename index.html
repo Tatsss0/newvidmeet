@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TechMed Video Consultation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Firebase (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+
+  <!-- Your firebase-init.js must call firebase.initializeApp(...) and (optionally) window.db = firebase.firestore(); -->
+  <script src="./firebase-init.js"></script>
+
+  <style>
+    :root {
+      --bg-0: #0b0d10;
+      --bg-1: #111418;
+      --text-0: #f9fafb;
+      --text-1: #e5e7eb;
+      --brand: #2563eb;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial;
+      background: var(--bg-0);
+      color: var(--text-1);
+    }
+    header {
+      padding: 14px 16px;
+      background: var(--bg-1);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      color: var(--text-0);
+      font-weight: 700;
+    }
+    #utility {
+      padding: 8px 16px;
+      background: #0d1117;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-dot { display:inline-block; width:10px; height:10px; border-radius:999px; background:#6b7280; }
+    .status-connected { background:#22c55e !important; }
+    .status-connecting { background:#eab308 !important; }
+    .status-disconnected { background:#ef4444 !important; }
+
+    /* Video area */
+    #video-area { position: relative; width: 100%; height: calc(100vh - 168px); background: #0a0c10; overflow: hidden; }
+    #remoteVideo, #localVideo { background:#000; border-radius:12px; }
+    #remoteVideo { position: absolute; inset: 0; width:100%; height:100%; object-fit: cover; z-index:1; }
+    #remoteVideo.shrinked { transform: translateY(28px); }
+    #localVideo {
+      position: absolute;
+      width: clamp(180px, 24vw, 320px);
+      aspect-ratio: 16/9;
+      bottom: 16px;
+      right: 16px;
+      object-fit: cover;
+      z-index: 3;
+      border: 2px solid rgba(255,255,255,0.22);
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+    #localVideo.lowered { transform: translateY(12px); }
+
+    /* Labels & avatars */
+    .video-label {
+      position: absolute;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: min(58vw, 560px);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      height: 28px;
+      line-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.62);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .2px;
+      pointer-events: none;
+      user-select: none;
+      z-index: 4;
+      opacity: 0;
+      transition: opacity .15s linear;
+    }
+    .video-avatar {
+      position: absolute;
+      width: 96px;
+      height: 96px;
+      border-radius: 999px;
+      object-fit: cover;
+      background: #2d2f31;
+      border: 2px solid rgba(255,255,255,0.24);
+      box-shadow: 0 10px 34px rgba(0,0,0,0.45);
+      z-index: 2;
+      display: none;
+    }
+
+    /* Controls */
+    #controls {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 20px;
+      background: rgba(20,23,28,0.75);
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 10px 34px rgba(0,0,0,0.45);
+      padding: 8px;
+      border-radius: 999px;
+      display: flex;
+      gap: 8px;
+      z-index: 5;
+    }
+    #controls.hidden { opacity: 0; pointer-events: none; }
+    .btn {
+      appearance: none; border: 0; background: #1f2937; color: #e5e7eb;
+      padding: 8px 10px; min-width: 40px; height: 40px; border-radius: 10px; cursor: pointer;
+    }
+    .btn:hover { filter: brightness(1.08); }
+    .btn-off { background: #374151; color: #9ca3af; }
+    .btn-red { background: #ef4444; color: white; }
+    .btn-sm { min-width: 28px; height: 28px; padding: 0 6px; border-radius: 6px; }
+
+    /* Room info */
+    #room-info { padding: 10px 16px; display:flex; gap:8px; align-items:center; }
+    #room-info input { flex:1 1 240px; background:#0d1117; color:#e5e7eb; border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:10px 12px; }
+
+    /* Members panel + overlay + toast */
+    .hidden { display: none !important; }
+    #overlay { position: fixed; inset: 0; background: rgba(10,12,16,0.78); backdrop-filter: blur(3px); display:flex; flex-direction: column; align-items:center; justify-content:center; gap:16px; z-index:10; }
+    #overlay.hidden { display: none; }
+    .spinner { width:40px; height:40px; border-radius:999px; border:3px solid rgba(255,255,255,0.15); border-top-color:#fff; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #overlayText { color:#fff; font-weight:600; }
+    #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 88px; padding:10px 14px; border-radius:10px; background: rgba(20,23,28,0.92); color:#fff; border:1px solid rgba(255,255,255,0.08); opacity:0; pointer-events:none; z-index:12; transition: opacity .2s ease; }
+    #toast.show { opacity:1; pointer-events:auto; }
+
+    /* Added slide-away to avoid undefined class usage */
+    .slide-away { opacity: 0.5; transition: opacity .2s ease; }
+  </style>
+</head>
+<body>
+  <header>TechMed Video Consultation</header>
+
+  <div id="utility">👥 Participants: <span id="participantCount">1</span> • <span id="connStatus" class="status-dot" title="Not connected"></span></div>
+
+  <div id="video-area">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay playsinline muted></video>
+
+    <img id="remoteAvatar" class="video-avatar" alt="Remote avatar" />
+    <img id="localAvatar" class="video-avatar" alt="Your avatar" />
+
+    <div id="remoteLabel" class="video-label" aria-hidden="true">Waiting for participant…</div>
+    <div id="localLabel" class="video-label" aria-hidden="true">You</div>
+  </div>
+
+  <div id="controls">
+    <button id="micBtn" class="btn" title="Toggle Microphone" disabled>🎤</button>
+    <button id="camBtn" class="btn" title="Toggle Camera" disabled>🎥</button>
+    <button id="screenBtn" class="btn" title="Share Screen" disabled>🖥️</button>
+    <button id="membersBtn" class="btn" title="Members">👤</button>
+    <button id="fullscreenBtn" class="btn" title="Fullscreen" disabled>⛶</button>
+    <button id="leaveBtn" class="btn btn-red" title="Leave" disabled>❌</button>
+  </div>
+
+  <div id="room-info">
+    <button id="createBtn" class="btn" title="Create Room">➕</button>
+    <input id="roomIdInput" placeholder="Enter Room ID" />
+    <button id="joinBtn" class="btn" title="Join Room">➡️</button>
+    <button id="copyBtn" class="btn" style="display:none;" title="Copy Room ID">🔗</button>
+  </div>
+
+  <div id="membersPanel" class="hidden" style="position:fixed; top:64px; right:16px; width:240px; max-height:50vh; overflow:auto; background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:12px; box-shadow:0 6px 24px rgba(0,0,0,0.12); z-index:1000;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <strong>Members</strong>
+      <button id="membersClose" class="btn btn-sm" title="Close">✕</button>
+    </div>
+    <ul id="membersList" style="list-style:none; padding-left:0; margin:0;"></ul>
+  </div>
+
+  <div id="overlay" class="hidden">
+    <div class="spinner" aria-hidden="true"></div>
+    <div id="overlayText">Setting up your camera…</div>
+  </div>
+
+  <div id="toast" aria-live="polite"></div>
+
+  <script>
+    // Fallback ICE; prefer fetching from your backend
+    window.ICE_SERVERS = [
+      { urls: ['stun:stun.l.google.com:19302'] }
+    ];
+
+    // Fetch ICE servers via your backend (never expose secrets in the client)
+    async function getIceServers() {
+      try {
+        const res = await fetch('/api/ice', { credentials: 'include' });
+        const data = await res.json();
+        const v = Array.isArray(data) ? data : (data.v?.iceServers || data.v?.urls || data.v || []);
+        if (v && v.length) return v;
+      } catch (_) {}
+      return window.ICE_SERVERS;
+    }
+  </script>
+
+  <script>
+  (function () {
+    if (!window.firebase) {
+      console.error('Firebase SDK not found. Ensure firebase-init.js is loaded and calls firebase.initializeApp(...)');
+    }
+    const db = window.db || (firebase && firebase.firestore ? firebase.firestore() : null);
+    const auth = firebase && firebase.auth ? firebase.auth() : null;
+    if (!db) console.warn('Firestore not initialized. Make sure firebase-init.js sets up Firestore.');
+
+    // UI elements
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const participantCount = document.getElementById('participantCount');
+    const roomInfo = document.getElementById('room-info');
+    const controls = document.getElementById('controls');
+    const overlay = document.getElementById('overlay');
+    const overlayText = document.getElementById('overlayText');
+    const connStatus = document.getElementById('connStatus');
+
+    const videoArea = document.getElementById('video-area');
+    const localLabelEl = document.getElementById('localLabel');
+    const remoteLabelEl = document.getElementById('remoteLabel');
+    const localAvatarEl = document.getElementById('localAvatar');
+    const remoteAvatarEl = document.getElementById('remoteAvatar');
+
+    // State
+    let localStream = null;
+    let remoteStream = null;
+    let peerConnection = null;
+    let screenStream = null;
+
+    // Firestore presence & snapshot unsubscribers
+    let currentRoomId = '';
+    let presenceDocRef = null;
+    let membersUnsub = null;
+    let offerCandidatesUnsub = null;
+    let answerCandidatesUnsub = null;
+    let callDocListenerUnsub = null;
+    let callMeta = {};
+
+    // Member info
+    let selfMemberId = '';
+    let selfDisplayName = '';
+    let localPhotoURL = '';
+
+    // from URL params
+    let patientNameFromParams = '';
+    let doctorNameFromParams = '';
+    let patientIdFromParams = '';
+
+    // Heartbeat
+    let presenceHeartbeat = null;
+
+    // --- Utility functions ---
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toast.classList.remove('show'), 2400);
+    }
+    function showOverlay(text) {
+      if (text) overlayText.textContent = text;
+      overlay.classList.remove('hidden');
+    }
+    function hideOverlay() { overlay.classList.add('hidden'); }
+
+    function setStatus(state) {
+      connStatus.classList.remove('status-connected','status-connecting','status-disconnected');
+      if (state === 'connected') connStatus.classList.add('status-connected');
+      else if (state === 'connecting') connStatus.classList.add('status-connecting');
+      else connStatus.classList.add('status-disconnected');
+    }
+
+    function setLocalLabelName(name) {
+      selfDisplayName = name || selfDisplayName || 'You';
+      try { localLabelEl.textContent = selfDisplayName; } catch (_) {}
+    }
+    function setRemoteLabelName(name) {
+      try { remoteLabelEl.textContent = name || 'Participant'; } catch (_) {}
+    }
+
+    function preferName() {
+      for (let i = 0; i < arguments.length; i++) {
+        const v = (arguments[i] || '').toString().trim();
+        if (v) return v;
+      }
+      return '';
+    }
+
+    function isGenericRoleName(name) {
+      return /^(patient|doctor|guest|participant|user|you)$/i.test((name || '').trim());
+    }
+
+    function setAvatarSrc(imgEl, name, url) {
+      if (!imgEl) return;
+      if (url) { imgEl.src = url; imgEl.style.display = ''; return; }
+      const initial = (name || 'User').trim().charAt(0).toUpperCase() || 'U';
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' fill='#2d2f31'/><text x='50%' y='54%' dominant-baseline='middle' text-anchor='middle' font-family='Arial, sans-serif' font-size='64' fill='#ffffff'>${initial}</text></svg>`;
+      imgEl.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+      imgEl.style.display = '';
+    }
+
+    function positionAvatarFor(videoEl, avatarEl) {
+      if (!videoEl || !avatarEl || !videoArea) return;
+      const areaRect = videoArea.getBoundingClientRect();
+      const rect = videoEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) { avatarEl.style.opacity = '0'; return; }
+      const w = avatarEl.offsetWidth || 96;
+      const h = avatarEl.offsetHeight || 96;
+      const left = Math.round(rect.left - areaRect.left + (rect.width - w) / 2);
+      const top = Math.round(rect.top - areaRect.top + (rect.height - h) / 2);
+      avatarEl.style.left = left + 'px';
+      avatarEl.style.top = top + 'px';
+      avatarEl.style.opacity = '1';
+    }
+
+    function updateAvatarsPosition() {
+      positionAvatarFor(remoteVideo, remoteAvatarEl);
+      positionAvatarFor(localVideo, localAvatarEl);
+    }
+
+    function updateLabelFor(videoEl, labelEl) {
+      if (!videoEl || !labelEl || !videoArea) return;
+      const areaRect = videoArea.getBoundingClientRect();
+      const rect = videoEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) { labelEl.style.opacity = '0'; return; }
+      const left = Math.round(rect.left - areaRect.left + 8);
+      const top = Math.round(rect.top - areaRect.top + rect.height - labelEl.offsetHeight - 8);
+      labelEl.style.left = left + 'px';
+      labelEl.style.top = top + 'px';
+      labelEl.style.opacity = '1';
+    }
+
+    function updateLabelsPosition() {
+      updateLabelFor(remoteVideo, remoteLabelEl);
+      updateLabelFor(localVideo, localLabelEl);
+    }
+
+    function updateLocalAvatarVisibility() {
+      try {
+        const track = localStream && localStream.getVideoTracks()[0];
+        const show = !track || !track.enabled;
+        localAvatarEl.style.display = show ? 'block' : 'none';
+        if (show) updateAvatarsPosition();
+      } catch (_) {}
+    }
+    function updateRemoteAvatarVisibility() {
+      try {
+        const track = remoteStream && remoteStream.getVideoTracks()[0];
+        const hasVideo = !!track && track.readyState === 'live' && !track.muted && (remoteVideo.videoWidth || 0) > 0;
+        const show = !hasVideo;
+        remoteAvatarEl.style.display = show ? 'block' : 'none';
+        if (show) updateAvatarsPosition();
+      } catch (_) {}
+    }
+
+    function stopStream(stream) {
+      if (!stream) return;
+      stream.getTracks().forEach(t => {
+        try { t.stop(); } catch (_) {}
+      });
+    }
+
+    async function ensureLocalStreams() {
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+      }
+      if (!remoteStream) {
+        remoteStream = new MediaStream();
+        remoteVideo.srcObject = remoteStream;
+      }
+      setTimeout(() => { updateLabelsPosition(); updateAvatarsPosition(); updateLocalAvatarVisibility(); updateRemoteAvatarVisibility(); }, 0);
+    }
+
+    async function leavePresence() {
+      try {
+        if (presenceDocRef) {
+          await presenceDocRef.set({ active: false, leftAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          presenceDocRef = null;
+        }
+      } catch (e) { console.warn('leavePresence failed', e); }
+    }
+
+    function cleanup() {
+      leavePresence().catch(()=>{});
+      if (presenceHeartbeat) { clearInterval(presenceHeartbeat); presenceHeartbeat = null; }
+      try { if (membersUnsub) membersUnsub(); } catch(_) {}
+      membersUnsub = null;
+      try { if (offerCandidatesUnsub) offerCandidatesUnsub(); } catch(_) {}
+      offerCandidatesUnsub = null;
+      try { if (answerCandidatesUnsub) answerCandidatesUnsub(); } catch(_) {}
+      answerCandidatesUnsub = null;
+      try { if (callDocListenerUnsub) callDocListenerUnsub(); } catch(_) {}
+      callDocListenerUnsub = null;
+
+      if (peerConnection) {
+        peerConnection.ontrack = null;
+        peerConnection.onicecandidate = null;
+        try { peerConnection.close(); } catch (_) {}
+      }
+      try { stopStream(localStream); } catch(_) {}
+      try { stopStream(screenStream); } catch(_) {}
+      if (remoteVideo.srcObject) {
+        try { remoteVideo.srcObject.getTracks().forEach(t => t.stop()); } catch(_) {}
+      }
+
+      localStream = null; remoteStream = null; peerConnection = null; screenStream = null;
+      participantCount.textContent = '1';
+      setStatus('disconnected');
+      updateLabelsPosition();
+    }
+
+    async function createPeer() {
+      if (!localStream) throw new Error('Local stream not available.');
+      const iceServers = await getIceServers();
+      peerConnection = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 10 });
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+      peerConnection.ontrack = (e) => {
+        if (!remoteStream) {
+          remoteStream = new MediaStream();
+          remoteVideo.srcObject = remoteStream;
+        }
+        if (e.streams && e.streams[0]) {
+          e.streams[0].getTracks().forEach((t) => remoteStream.addTrack(t));
+        } else if (e.track) {
+          remoteStream.addTrack(e.track);
+        }
+        hideOverlay();
+        setStatus('connected');
+        updateLabelsPosition();
+        updateRemoteAvatarVisibility();
+        updateAvatarsPosition();
+      };
+
+      peerConnection.onconnectionstatechange = () => {
+        if (!peerConnection) return;
+        if (peerConnection.connectionState === 'connected') participantCount.textContent = '2';
+        if (['disconnected','failed','closed'].includes(peerConnection.connectionState)) participantCount.textContent = '1';
+        setStatus(
+          peerConnection.connectionState === 'connected' ? 'connected' :
+          peerConnection.connectionState === 'connecting' ? 'connecting' : 'disconnected'
+        );
+        updateLabelsPosition();
+        updateRemoteAvatarVisibility();
+        updateAvatarsPosition();
+      };
+
+      return peerConnection;
+    }
+
+    // --------- Firestore presence & members ----------
+    function getDisplayName(as) {
+      const u = auth && auth.currentUser;
+      const roleDefault = as === 'doctor' ? 'Doctor' : 'Patient';
+      const authNameRaw = (u && (u.displayName || (u.email ? u.email.split('@')[0] : ''))) || '';
+      const authName = isGenericRoleName(authNameRaw) ? '' : authNameRaw;
+      const paramName = as === 'doctor' ? (doctorNameFromParams || '') : (patientNameFromParams || '');
+      const storedName = as === 'doctor'
+        ? (localStorage.getItem('techmed_doctor_name') || '')
+        : (localStorage.getItem('techmed_patient_name') || localStorage.getItem('techmed_display_name') || '');
+      return preferName(paramName, storedName, authName, roleDefault);
+    }
+
+    async function fetchProfileName(uid) {
+      if (!uid || !db) return '';
+      try {
+        const uDoc = await db.collection('users').doc(uid).get();
+        if (uDoc.exists) {
+          const d = uDoc.data() || {};
+          const name = preferName(d.displayName, d.fullName, [d.firstName, d.lastName].filter(Boolean).join(' '), d.name);
+          if (name) return name;
+        }
+      } catch (_) {}
+      try {
+        const pDoc = await db.collection('patients').doc(uid).get();
+        if (pDoc.exists) {
+          const d = pDoc.data() || {};
+          const name = preferName(d.displayName, d.fullName, [d.firstName, d.lastName].filter(Boolean).join(' '), d.name);
+          if (name) return name;
+        }
+      } catch (_) {}
+      return '';
+    }
+
+    async function fetchPatientNameById(pid) {
+      if (!pid || !db) return '';
+      try {
+        const pDoc = await db.collection('patients').doc(pid).get();
+        if (pDoc.exists) {
+          const d = pDoc.data() || {};
+          return preferName(d.displayName, d.fullName, [d.firstName, d.lastName].filter(Boolean).join(' '), d.name);
+        }
+      } catch(_) {}
+      return '';
+    }
+
+    async function improveLocalNameIfPossible(role) {
+      try {
+        const uid = auth && auth.currentUser && auth.currentUser.uid;
+        if (!uid) return;
+        const best = await fetchProfileName(uid);
+        if (best && (isGenericRoleName(selfDisplayName) || !selfDisplayName)) {
+          setLocalLabelName(best);
+          if (presenceDocRef) {
+            try { await presenceDocRef.set({ name: best }, { merge: true }); } catch(_) {}
+          }
+        }
+      } catch (_) {}
+    }
+
+    async function improveLocalPatientNameFromId() {
+      try {
+        if (!patientIdFromParams) return;
+        const best = await fetchPatientNameById(patientIdFromParams);
+        if (!best) return;
+        setLocalLabelName(best);
+        if (presenceDocRef) {
+          try { await presenceDocRef.set({ name: best }, { merge: true }); } catch(_) {}
+        }
+      } catch(_) {}
+    }
+
+    async function enterPresence(roomId, role) {
+      currentRoomId = roomId;
+      let pid = (auth && auth.currentUser && auth.currentUser.uid) || localStorage.getItem('techmed_member_id');
+      if (!pid) { pid = 'anon_' + Math.random().toString(36).slice(2, 10); localStorage.setItem('techmed_member_id', pid); }
+      const name = getDisplayName(role);
+      presenceDocRef = db ? db.collection('calls').doc(roomId).collection('members').doc(pid) : null;
+      if (presenceDocRef) {
+        try {
+          await presenceDocRef.set({
+            uid: (auth && auth.currentUser && auth.currentUser.uid) || null,
+            name,
+            role: role || 'guest',
+            photoURL: (auth && auth.currentUser && auth.currentUser.photoURL) || null,
+            patientId: patientIdFromParams || null,
+            active: true,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            joinedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        } catch(e) { console.warn('enterPresence write failed', e); }
+      }
+
+      selfMemberId = pid;
+      setLocalLabelName(name);
+      localPhotoURL = (auth && auth.currentUser && auth.currentUser.photoURL) || '';
+      setAvatarSrc(localAvatarEl, name, localPhotoURL);
+      updateLocalAvatarVisibility();
+      updateLabelsPosition();
+
+      // Heartbeat to keep presence fresh
+      if (presenceHeartbeat) clearInterval(presenceHeartbeat);
+      presenceHeartbeat = setInterval(() => {
+        try {
+          presenceDocRef?.set({ updatedAt: firebase.firestore.FieldValue.serverTimestamp(), active: true }, { merge: true });
+        } catch (_) {}
+      }, 10000);
+
+      if (role === 'patient') improveLocalPatientNameFromId();
+      else improveLocalNameIfPossible(role);
+    }
+
+    function listenMembers(roomId) {
+      if (!db) return;
+      try { if (membersUnsub) membersUnsub(); } catch(_) {}
+      membersUnsub = null;
+
+      const TTL_MS = 30000;
+      const listEl = document.getElementById('membersList');
+
+      membersUnsub = db.collection('calls').doc(roomId).collection('members').onSnapshot((snap) => {
+        const now = Date.now();
+        const byRole = { doctor: null, patient: null };
+
+        snap.forEach(d => {
+          const m = d.data() || {};
+          if (m.active === false) return;
+          if (m.role !== 'doctor' && m.role !== 'patient') return;
+          const uAt = (m.updatedAt && m.updatedAt.toMillis) ? m.updatedAt.toMillis() : 0;
+          if (uAt && (now - uAt) > TTL_MS) return; // stale
+          const candidate = { ...m, _id: d.id, _updatedAtMs: uAt };
+          const prev = byRole[m.role];
+          if (!prev || (candidate._updatedAtMs || 0) >= (prev?._updatedAtMs || 0)) {
+            byRole[m.role] = candidate;
+          }
+        });
+
+        const participants = [byRole.doctor, byRole.patient].filter(Boolean);
+
+        if (listEl) {
+          listEl.innerHTML = '';
+          participants.forEach(m => {
+            const li = document.createElement('li');
+            const composite = [m.firstName, m.lastName].filter(Boolean).join(' ');
+            const display = (m.name || m.fullName || composite || m.displayName || (m.role === 'doctor' ? 'Doctor' : 'Patient')).trim();
+            li.textContent = `${display} • ${m.role}`;
+            listEl.appendChild(li);
+          });
+        }
+
+        try { participantCount.textContent = String(Math.max(1, participants.length)); } catch(_) {}
+      });
+    }
+
+    // --------- Create room (doctor) ----------
+    async function createInRoom(roomId) {
+      if (!db) { showToast('Firestore not ready'); return; }
+      document.getElementById('roomIdInput').value = roomId;
+      const callDoc = db.collection('calls').doc(roomId);
+      const offerCandidates = callDoc.collection('offerCandidates');
+      const answerCandidates = callDoc.collection('answerCandidates');
+
+      // Copy/share
+      const copyBtn = document.getElementById('copyBtn');
+      copyBtn.style.display = 'inline-block';
+      copyBtn.onclick = () => {
+        const link = `${location.origin}${location.pathname}?room=${encodeURIComponent(roomId)}`;
+        if (navigator.share) {
+          navigator.share({ title: 'TechMed Video Consultation', text: 'Join my meeting', url: link }).catch(()=>{});
+        } else {
+          navigator.clipboard.writeText(link).then(() => showToast('Link copied')).catch(()=>showToast('Copy failed'));
+        }
+      };
+
+      await ensureLocalStreams();
+      await createPeer();
+
+      // Send ICE to offerCandidates
+      peerConnection.onicecandidate = (e) => {
+        if (e.candidate) {
+          try { offerCandidates.add(e.candidate.toJSON()); } catch(e){ console.warn('offerCandidates.add failed', e); }
+        }
+      };
+
+      setStatus('connecting');
+      showOverlay('Waiting for someone to join…');
+
+      try {
+        const offerDescription = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offerDescription);
+        const baseDoc = { offer: { type: offerDescription.type, sdp: offerDescription.sdp }, createdAt: firebase.firestore.FieldValue.serverTimestamp() };
+        if (patientIdFromParams) baseDoc.patientId = patientIdFromParams;
+        await callDoc.set(baseDoc, { merge: true });
+      } catch (e) {
+        console.error('Failed to create offer', e);
+        showToast('Failed to start room');
+        hideOverlay();
+        return;
+      }
+
+      try {
+        callDocListenerUnsub = callDoc.onSnapshot(async (snapshot) => {
+          const data = snapshot.exists ? snapshot.data() : null;
+          if (data && data.answer && peerConnection && !peerConnection.currentRemoteDescription) {
+            try {
+              await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+              if (!answerCandidatesUnsub) {
+                answerCandidatesUnsub = answerCandidates.onSnapshot(snap => {
+                  snap.docChanges().forEach(async change => {
+                    if (change.type === 'added') {
+                      const cand = change.doc.data();
+                      try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+                      } catch (err) {
+                        console.warn('addIceCandidate (answer) failed', err);
+                      }
+                    }
+                  });
+                });
+              }
+              participantCount.textContent = '2';
+              updateLabelsPosition();
+              updateRemoteAvatarVisibility();
+              updateAvatarsPosition();
+              hideOverlay();
+            } catch (err) {
+              console.error('Failed to set remote answer', err);
+            }
+          }
+        });
+
+        if (!answerCandidatesUnsub) {
+          answerCandidatesUnsub = answerCandidates.onSnapshot(snap => {
+            snap.docChanges().forEach(async change => {
+              if (change.type === 'added' && peerConnection) {
+                const cand = change.doc.data();
+                try { await peerConnection.addIceCandidate(new RTCIceCandidate(cand)); } catch (err) { console.warn('addIceCandidate answerCandidates failed', err); }
+              }
+            });
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to attach answer listeners', e);
+      }
+
+      roomInfo.classList.add('slide-away');
+
+      await enterPresence(roomId, 'doctor');
+      listenMembers(roomId);
+      currentRoomId = roomId;
+    }
+
+    // --------- Join room (patient) ----------
+    async function joinInRoom(roomId) {
+      if (!db) { showToast('Firestore not ready'); return; }
+      document.getElementById('roomIdInput').value = roomId;
+      const callDoc = db.collection('calls').doc(roomId);
+      const offerCandidates = callDoc.collection('offerCandidates');
+      const answerCandidates = callDoc.collection('answerCandidates');
+
+      await ensureLocalStreams();
+      await createPeer();
+
+      peerConnection.onicecandidate = (e) => {
+        if (e.candidate) {
+          try { answerCandidates.add(e.candidate.toJSON()); } catch(e){ console.warn('answerCandidates.add failed', e); }
+        }
+      };
+
+      if (!offerCandidatesUnsub) {
+        offerCandidatesUnsub = offerCandidates.onSnapshot(snapshot => {
+          snapshot.docChanges().forEach(async change => {
+            if (change.type === 'added' && peerConnection) {
+              try { await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data())); } catch (err) { /* ignore initially */ }
+            }
+          });
+        });
+      }
+
+      setStatus('connecting');
+      showOverlay('Waiting for doctor to start…');
+
+      let answered = false;
+      callDocListenerUnsub = callDoc.onSnapshot(async (snap) => {
+        const data = snap.exists ? (snap.data() || {}) : null;
+        if (!data || !data.offer || answered) return;
+        try {
+          if (!peerConnection) {
+            console.warn('No peerConnection when offer received');
+            return;
+          }
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+          await callDoc.set({ answer: { type: answer.type, sdp: answer.sdp }, answeredAt: firebase.firestore.FieldValue.serverTimestamp(), ...(patientIdFromParams ? { patientId: patientIdFromParams } : {}) }, { merge: true });
+
+          if (!answerCandidatesUnsub) {
+            answerCandidatesUnsub = answerCandidates.onSnapshot(snap2 => {
+              snap2.docChanges().forEach(async ch => {
+                if (ch.type === 'added' && peerConnection) {
+                  try { await peerConnection.addIceCandidate(new RTCIceCandidate(ch.doc.data())); } catch (err) { console.warn('addIceCandidate (answerCandidates) failed', err); }
+                }
+              });
+            });
+          }
+
+          roomInfo.classList.add('slide-away');
+          participantCount.textContent = '2';
+          hideOverlay();
+          answered = true;
+        } catch (e) {
+          console.error('Failed to accept offer', e);
+          showToast('Failed to join room');
+        }
+      });
+
+      await enterPresence(roomId, 'patient');
+      listenMembers(roomId);
+      currentRoomId = roomId;
+    }
+
+    // --- UI bindings: create/join/copy ---
+    document.getElementById('createBtn').onclick = async () => {
+      const explicit = (document.getElementById('roomIdInput').value || '').trim();
+      const roomId = explicit || `doc_${Math.random().toString(36).slice(2, 12)}`;
+      await createInRoom(roomId);
+    };
+
+    document.getElementById('joinBtn').onclick = async () => {
+      const callId = document.getElementById('roomIdInput').value.trim();
+      if (!callId) { showToast('Enter Room ID'); return; }
+      await joinInRoom(callId);
+    };
+
+    // --- Controls ---
+    document.getElementById('micBtn').onclick = () => {
+      if (localStream) {
+        const track = localStream.getAudioTracks()[0];
+        if (!track) return;
+        track.enabled = !track.enabled;
+        const btn = document.getElementById('micBtn');
+        btn.textContent = track.enabled ? '🎤' : '🔇';
+        btn.classList.toggle('btn-off', !track.enabled);
+        btn.setAttribute('aria-pressed', String(!track.enabled));
+        showToast(track.enabled ? 'Mic on' : 'Mic off');
+      }
+    };
+    document.getElementById('camBtn').onclick = () => {
+      if (localStream) {
+        const track = localStream.getVideoTracks()[0];
+        if (!track) return;
+        track.enabled = !track.enabled;
+        const btn = document.getElementById('camBtn');
+        btn.textContent = track.enabled ? '🎥' : '📷';
+        btn.classList.toggle('btn-off', !track.enabled);
+        btn.setAttribute('aria-pressed', String(!track.enabled));
+        showToast(track.enabled ? 'Camera on' : 'Camera off');
+        updateLocalAvatarVisibility();
+        updateAvatarsPosition();
+      }
+    };
+    document.getElementById('leaveBtn').onclick = () => { cleanup(); location.reload(); };
+    document.getElementById('fullscreenBtn').onclick = () => {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    };
+
+    // Screen share
+    document.getElementById('screenBtn').onclick = async () => {
+      if (!peerConnection) return;
+      if (!screenStream) {
+        try {
+          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          const screenTrack = screenStream.getVideoTracks()[0];
+          const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (sender && screenTrack) { await sender.replaceTrack(screenTrack); }
+          screenTrack.onended = async () => {
+            const camTrack = localStream.getVideoTracks()[0];
+            if (sender && camTrack) await sender.replaceTrack(camTrack);
+            stopStream(screenStream); screenStream = null;
+            updateLabelsPosition();
+          };
+        } catch (e) { console.error(e); showToast('Screen share failed'); }
+      } else {
+        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+        const camTrack = localStream.getVideoTracks()[0];
+        if (sender && camTrack) await sender.replaceTrack(camTrack);
+        stopStream(screenStream); screenStream = null;
+        updateLabelsPosition();
+      }
+    };
+
+    // Drag local video (mouse + touch) - clear right/bottom to avoid conflicts
+    let isDragging = false, offsetX = 0, offsetY = 0;
+    localVideo.addEventListener('mousedown', e => {
+      isDragging = true;
+      localVideo.style.right = 'auto';
+      localVideo.style.bottom = 'auto';
+      offsetX = e.clientX - localVideo.offsetLeft;
+      offsetY = e.clientY - localVideo.offsetTop;
+      localVideo.style.cursor = 'grabbing';
+    });
+    document.addEventListener('mousemove', e => {
+      if (!isDragging) return;
+      localVideo.style.left = (e.clientX - offsetX) + 'px';
+      localVideo.style.top = (e.clientY - offsetY) + 'px';
+      updateLabelsPosition();
+    });
+    document.addEventListener('mouseup', () => { isDragging = false; localVideo.style.cursor = 'grab'; updateLabelsPosition(); });
+
+    localVideo.addEventListener('touchstart', e => {
+      isDragging = true;
+      localVideo.style.right = 'auto';
+      localVideo.style.bottom = 'auto';
+      const t = e.touches[0];
+      offsetX = t.clientX - localVideo.offsetLeft; offsetY = t.clientY - localVideo.offsetTop;
+    }, { passive: true });
+    document.addEventListener('touchmove', e => {
+      if (!isDragging) return;
+      const t = e.touches[0];
+      localVideo.style.left = (t.clientX - offsetX) + 'px';
+      localVideo.style.top = (t.clientY - offsetY) + 'px';
+      updateLabelsPosition();
+    }, { passive: true });
+    document.addEventListener('touchend', () => { isDragging = false; updateLabelsPosition(); });
+
+    // Reposition labels when metadata (dimensions) load
+    localVideo.addEventListener('loadedmetadata', () => { updateLabelsPosition(); updateAvatarsPosition(); });
+    remoteVideo.addEventListener('loadedmetadata', () => { updateLabelsPosition(); updateAvatarsPosition(); });
+
+    // Auto-hide controls
+    let hideControlsTimeout;
+    function showControls() {
+      controls.classList.remove('hidden');
+      localVideo.classList.remove('lowered');
+      remoteVideo.classList.add('shrinked');
+      clearTimeout(hideControlsTimeout);
+      hideControlsTimeout = setTimeout(() => {
+        controls.classList.add('hidden');
+        localVideo.classList.add('lowered');
+        remoteVideo.classList.remove('shrinked');
+        updateLabelsPosition();
+      }, 3000);
+      requestAnimationFrame(() => { updateLabelsPosition(); updateAvatarsPosition(); });
+    }
+    ['mousemove','touchstart'].forEach(evt => document.addEventListener(evt, showControls));
+    showControls();
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', cleanup);
+
+    // Parse URL params
+    const params = new URLSearchParams(location.search);
+    const as = (params.get('as') || '').toLowerCase();
+    patientNameFromParams = (params.get('patientName') || params.get('pn') || '').trim();
+    doctorNameFromParams = (params.get('doctorName') || params.get('dn') || '').trim();
+    patientIdFromParams = (params.get('patientId') || params.get('pid') || '').trim();
+    if (patientNameFromParams) try { localStorage.setItem('techmed_patient_name', patientNameFromParams); } catch(_) {}
+    if (doctorNameFromParams) try { localStorage.setItem('techmed_doctor_name', doctorNameFromParams); } catch(_) {}
+    if (patientIdFromParams) try { localStorage.setItem('techmed_patient_id', patientIdFromParams); } catch(_) {}
+    const hostUid = params.get('hostUid') || '';
+    let roomFromParam = (params.get('room') || '').trim();
+    if (!roomFromParam && hostUid) roomFromParam = `doc_${hostUid}`;
+    if (roomFromParam) document.getElementById('roomIdInput').value = roomFromParam;
+
+    // Initial local label
+    try {
+      const initialName = getDisplayName(as);
+      setLocalLabelName(initialName);
+      setAvatarSrc(localAvatarEl, initialName, (auth && auth.currentUser && auth.currentUser.photoURL) || '');
+      if (as === 'patient' && patientIdFromParams) improveLocalPatientNameFromId();
+    } catch(_) {}
+
+    // Auto init: ensure auth loaded (if your rules require it) and get camera
+    (async () => {
+      await new Promise(resolve => {
+        try { if (auth) firebase.auth().onAuthStateChanged(() => resolve()); else resolve(); } catch (_) { resolve(); }
+      });
+      try {
+        showOverlay('Setting up your camera…');
+        await ensureLocalStreams();
+        hideOverlay();
+      } catch (e) {
+        hideOverlay();
+        showToast('Camera/mic permission denied');
+      }
+      ['micBtn','camBtn','screenBtn','fullscreenBtn','leaveBtn'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = false;
+      });
+
+      // Auto host/join based on role/url
+      if (as === 'doctor' && (roomFromParam || hostUid)) {
+        const roomId = roomFromParam || `doc_${hostUid}`;
+        await createInRoom(roomId);
+        return;
+      }
+      if (roomFromParam) {
+        await joinInRoom(roomFromParam);
+      }
+      updateLabelsPosition();
+    })();
+
+    // Enter to join
+    document.getElementById('roomIdInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('joinBtn').click();
+    });
+
+    // Members UI toggles
+    document.getElementById('membersBtn').addEventListener('click', () => {
+      const p = document.getElementById('membersPanel');
+      p.classList.toggle('hidden');
+      updateLabelsPosition();
+    });
+    document.getElementById('membersClose').addEventListener('click', () => {
+      document.getElementById('membersPanel').classList.add('hidden');
+      updateLabelsPosition();
+    });
+
+    // Reposition on resize
+    window.addEventListener('resize', () => { updateLabelsPosition(); updateAvatarsPosition(); });
+  })();
+  </script>
+</body>
+</html>
