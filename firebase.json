@@ -1,0 +1,10 @@
+{
+  "hosting": {
+    "rewrites": [
+      { "source": "/api/ice", "function": "ice" }
+    ]
+  },
+  "functions": {
+    "source": "functions"
+  }
+}
